@@ -1,0 +1,16 @@
+# Keep the build context small — only src/ and model_output/final are COPYed.
+.venv/
+venv/
+mlruns/
+mlflow.db
+*.db
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+tests/
+model_output/checkpoint-*
+*.log
+.DS_Store
+PROJECT_BRIEF.md

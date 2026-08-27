@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+model_output/
+mlruns/
+mlflow.db
+*.db
+.venv/
+venv/
+*.egg-info/
+
+# Internal planning doc — keep local, not in the public repo
+PROJECT_BRIEF.md
