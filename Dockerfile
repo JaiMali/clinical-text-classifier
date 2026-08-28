@@ -1,5 +1,12 @@
-# Serves the trained model via FastAPI. Assumes model_output/final exists
-# (train first, or mount/copy a trained checkpoint in).
+# Serves the trained model via FastAPI.
+#
+# The model checkpoint is NOT baked into the image -- it is mounted at run time
+# so images stay code-only (faster builds/pushes) and the model has its own
+# lifecycle. Provide it as a read-only volume at $MODEL_DIR:
+#
+#   docker run -p 8000:8000 -v /path/to/model_output/final:/app/model_output/final:ro \
+#     clinical-text-classifier
+#
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -13,7 +20,6 @@ COPY requirements-api.txt .
 RUN pip install --no-cache-dir -r requirements-api.txt
 
 COPY src/ ./src/
-COPY model_output/final ./model_output/final
 
 ENV MODEL_DIR=/app/model_output/final
 

@@ -1,4 +1,4 @@
-# Keep the build context small — only src/ and model_output/final are COPYed.
+# Keep the build context small — only src/ is COPYed (model is a runtime volume).
 .venv/
 venv/
 mlruns/
@@ -10,7 +10,9 @@ __pycache__/
 .git/
 .gitignore
 tests/
-model_output/checkpoint-*
+model_output/
+infra/
+.github/
 *.log
 .DS_Store
 PROJECT_BRIEF.md

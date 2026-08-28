@@ -40,9 +40,21 @@ pytest -m integration       # includes real dataset download
 
 ## Deployment
 
+Runs on a free-tier **AWS EC2** instance (`t3.micro`, Amazon Linux 2023),
+provisioned with **Terraform** ([`infra/`](infra/)). **GitHub Actions**
+([`.github/workflows/ci-deploy.yml`](.github/workflows/ci-deploy.yml)) runs the
+test suite, builds a CPU-only image, pushes it to **GHCR**, then SSHes to the
+instance to pull and restart the container.
+
+The image is code-only; the model checkpoint is mounted as a read-only volume
+so images stay small and the model has its own lifecycle.
+
 ```bash
+# Local
 docker build -t clinical-text-classifier .
-docker run -p 8000:8000 clinical-text-classifier
+docker run -p 8000:8000 \
+  -v "$(pwd)/model_output/final:/app/model_output/final:ro" \
+  clinical-text-classifier
 ```
 
 Deployed on AWS EC2 at: _(add URL once live)_
@@ -54,6 +66,6 @@ Deployed on AWS EC2 at: _(add URL once live)_
 - [x] FastAPI serving layer
 - [x] Test suite
 - [x] Dockerfile
-- [ ] AWS deployment
-- [ ] CI/CD (GitHub Actions)
+- [x] AWS deployment (Terraform + EC2)
+- [x] CI/CD (GitHub Actions -> GHCR -> EC2)
 - [ ] MIMIC-III loader (pending PhysioNet credentialing)

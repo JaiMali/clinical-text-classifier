@@ -1,0 +1,7 @@
+# Terraform working files — never commit state (may contain sensitive values)
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfplan
+# .terraform.lock.hcl IS committed (pins provider versions)
