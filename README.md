@@ -57,7 +57,14 @@ docker run -p 8000:8000 \
   clinical-text-classifier
 ```
 
-Deployed on AWS EC2 at: _(add URL once live)_
+**Live:** http://107.21.9.181 &nbsp;·&nbsp; [`/docs`](http://107.21.9.181/docs) &nbsp;·&nbsp; [`/health`](http://107.21.9.181/health)
+
+```bash
+curl -X POST http://107.21.9.181/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "Patients were randomly assigned to prednisolone or placebo ."}'
+# -> {"label":"methods","confidence":0.99,...}
+```
 
 ## Status
 
