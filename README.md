@@ -1,78 +1,146 @@
 # Clinical Text Classifier
 
-Fine-tunes DistilBERT to classify clinical text sentences, served as a REST API and deployed via Docker.
+![CI](https://github.com/JaiMali/clinical-text-classifier/actions/workflows/ci-deploy.yml/badge.svg)
 
-Built as a resume/portfolio project demonstrating the ML engineering pipeline end-to-end: training, experiment tracking, serving, testing, and deployment.
+Takes one sentence from a medical research abstract and predicts which part of
+the abstract it belongs to: `background`, `objective`, `methods`, `results`, or
+`conclusions`. It's a fine-tuned DistilBERT model behind a FastAPI service,
+running on AWS.
 
-## Architecture
+**Live:** http://107.21.9.181/docs
 
-```
-data/loader.py      -- dataset-agnostic loading interface (swap datasets without touching anything else)
-train.py             -- fine-tunes DistilBERT, tracks every run in MLflow
-api/main.py          -- FastAPI service wrapping the trained model
-tests/                -- pytest suite for the data contract and the API
-Dockerfile            -- containerizes the serving layer for deployment
-```
+## Why I built this
 
-### Why an isolated data-loading layer
+I'm trying to move into ML / ML-infra work, and most of what I'd done before
+was Jupyter notebooks that never left my laptop. I wanted one project that goes
+the whole way — raw dataset, to a trained model, to a running API on a cloud
+server with tests and CI — because "everything after the notebook" was exactly
+the part I hadn't practiced.
 
-This project currently trains on **PubMed 20k RCT** (public, no credentialing required). A planned v2 will retrain on **MIMIC-III** once PhysioNet access is approved. Every dataset-specific detail (source, column names, label taxonomy) lives entirely in `data/loader.py` behind a single `load_dataset(name)` function returning a standardized `DatasetBundle`. Training, serving, and tests never import a dataset directly -- so swapping datasets is a new loader function, not a rewrite.
+So the model itself is intentionally plain: a small BERT, a standard fine-tune,
+no clever tricks. The part I cared about is everything around it — the data
+abstraction, experiment tracking, the container, the Terraform, the deploy
+pipeline.
 
-### Why DistilBERT (not QLoRA / a large LLM)
+## What it does
 
-DistilBERT (66M params) is small enough to fully fine-tune directly. QLoRA -- quantized low-rank adaptation -- solves a different problem: making fine-tuning feasible for much larger models (billions of parameters) that can't fit in GPU memory for full fine-tuning. It isn't needed here, but is used in a separate project fine-tuning an 8B-parameter open-weight LLM.
+[PubMed 20k RCT](https://huggingface.co/datasets/armanc/pubmed-rct20k) is
+~200k sentences pulled from the abstracts of randomized controlled trials, each
+labelled with its role. Given:
 
-## Running locally
+> Patients were randomly assigned to prednisolone or placebo .
+
+the model returns:
 
 ```bash
+curl -X POST http://107.21.9.181/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "Mean pain scores fell from 8.2 to 3.1 ( p < 0.001 ) ."}'
+
+# {"label": "results", "confidence": 0.997, "all_scores": { ... }}
+```
+
+<!-- TODO: screenshot the Swagger UI at /docs, save as docs/api.png, uncomment:
+![API docs](docs/api.png)
+-->
+
+## Results
+
+Full write-up — confusion matrix, per-class numbers, failure examples — in
+**[docs/evaluation.md](docs/evaluation.md)**. Short version, on the held-out
+test split (29,578 sentences the model never saw):
+
+| metric | value |
+| --- | --- |
+| accuracy | 86.6% |
+| macro F1 | 0.806 |
+
+`methods` and `results` are easy (F1 ≈ 0.93). `objective` and `background` are
+hard (F1 ≈ 0.65–0.70) — they're both short, general sentences at the top of an
+abstract and the line between "here's the problem" and "here's what we tested"
+is genuinely blurry. Published results on this dataset get to ~92%, but they do
+it by also feeding the model the surrounding sentences as context; this one
+classifies each sentence on its own. Closing that gap is the main thing I'd try
+next.
+
+## How it's put together
+
+```
+src/data/loader.py    the only file that knows anything dataset-specific
+src/train.py           fine-tune + log params/metrics/model to MLflow
+src/api/main.py         FastAPI wrapper around the saved checkpoint
+scripts/evaluate.py     regenerates docs/evaluation.md + the confusion matrix
+infra/                  Terraform for the EC2 instance + security group
+.github/workflows/      test -> build image -> push to GHCR -> deploy to EC2
+```
+
+**The data loader is deliberately isolated.** Right now it loads PubMed 20k
+RCT; the plan is to retrain on MIMIC-III once my PhysioNet access comes
+through. Everything dataset-specific — source, column names, the label list —
+sits behind one `load_dataset(name)` that returns a standard `DatasetBundle`.
+Training, serving and the tests never import a dataset directly, so switching
+datasets is a new function in one file, not a rewrite.
+
+**Why DistilBERT and not LoRA / a big LLM.** DistilBERT is 66M parameters,
+small enough to fully fine-tune on a laptop GPU. LoRA / QLoRA exist to make
+fine-tuning possible for models too big to fit in memory otherwise — a real
+problem for an 8B model, not for this one. (I've got a separate project using
+QLoRA where it actually matters.)
+
+**Why EC2 and not something serverless.** Mostly to learn the
+EC2 / security-group / SSH side of things, since that's what a lot of job
+postings list. It's a `t3.micro` on the free tier with a 2 GB swapfile so the
+model load doesn't OOM. `terraform destroy` removes everything.
+
+## Running it locally
+
+```bash
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# Train (logs to MLflow; view with `mlflow ui`)
+# train (logs to MLflow — view with `mlflow ui --port 5001`)
 python -m src.train --dataset pubmed_20k_rct --epochs 3
 
-# Serve
+# serve the trained model
 uvicorn src.api.main:app --reload
 
-# Test
-pytest                      # unit tests only
-pytest -m integration       # includes real dataset download
+# tests
+pytest                  # unit only
+pytest -m integration   # also downloads the real dataset
 ```
 
-## Deployment
-
-Runs on a free-tier **AWS EC2** instance (`t3.micro`, Amazon Linux 2023),
-provisioned with **Terraform** ([`infra/`](infra/)). **GitHub Actions**
-([`.github/workflows/ci-deploy.yml`](.github/workflows/ci-deploy.yml)) runs the
-test suite, builds a CPU-only image, pushes it to **GHCR**, then SSHes to the
-instance to pull and restart the container.
-
-The image is code-only; the model checkpoint is mounted as a read-only volume
-so images stay small and the model has its own lifecycle.
+Docker (the image is code-only — the model is mounted at runtime so builds stay
+small):
 
 ```bash
-# Local
 docker build -t clinical-text-classifier .
 docker run -p 8000:8000 \
   -v "$(pwd)/model_output/final:/app/model_output/final:ro" \
   clinical-text-classifier
 ```
 
-**Live:** http://107.21.9.181 &nbsp;·&nbsp; [`/docs`](http://107.21.9.181/docs) &nbsp;·&nbsp; [`/health`](http://107.21.9.181/health)
+## Deployment
 
-```bash
-curl -X POST http://107.21.9.181/predict \
-  -H 'Content-Type: application/json' \
-  -d '{"text": "Patients were randomly assigned to prednisolone or placebo ."}'
-# -> {"label":"methods","confidence":0.99,...}
-```
+A push to `main` triggers GitHub Actions: run the tests, build a CPU-only
+`linux/amd64` image, push it to GHCR, then SSH into the EC2 box, pull, and
+restart the container with a health check. The model file lives on the instance
+and is bind-mounted into the container. Infra is all in
+[`infra/`](infra/) — `terraform apply` to stand it up, `terraform destroy` to
+tear it down.
 
-## Status
+## Known limitations
 
-- [x] Data loading interface + PubMed 20k RCT loader
-- [x] Training script with MLflow tracking
-- [x] FastAPI serving layer
-- [x] Test suite
-- [x] Dockerfile
-- [x] AWS deployment (Terraform + EC2)
-- [x] CI/CD (GitHub Actions -> GHCR -> EC2)
-- [ ] MIMIC-III loader (pending PhysioNet credentialing)
+- **Single-sentence context** — ~86% here vs ~92% with surrounding sentences.
+  Biggest lever for a v2.
+- **DistilBERT is small on purpose** — a bigger model would likely do better;
+  that wasn't the point.
+- **HTTP, not HTTPS**, and the URL is a bare IP that changes if the instance
+  restarts. Fine for a demo; a real service would want a domain + TLS.
+- **`t3.micro`** handles one request at a time comfortably and not much more.
+- **MIMIC-III loader is a stub** — waiting on PhysioNet credentialing. That's
+  the planned next dataset.
+
+## Tech
+
+Python · PyTorch · Hugging Face Transformers · scikit-learn · MLflow · FastAPI ·
+Docker · Terraform · AWS EC2 · GitHub Actions
