@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/clinical-text-classifier
+  IMAGE: ghcr.io/jaimali/clinical-text-classifier
 
 jobs:
   test:
@@ -69,7 +69,7 @@ jobs:
           envs: GHCR_TOKEN,GHCR_USER
           script: |
             set -e
-            IMAGE=ghcr.io/${{ github.repository_owner }}/clinical-text-classifier:latest
+            IMAGE=ghcr.io/jaimali/clinical-text-classifier:latest
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
             docker pull "$IMAGE"
             docker rm -f ctc 2>/dev/null || true
