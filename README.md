@@ -50,22 +50,27 @@ Or in the browser — FastAPI's auto-generated docs at
 
 ## Results
 
-Full write-up — confusion matrix, per-class numbers, failure examples — in
-**[docs/evaluation.md](docs/evaluation.md)**. Short version, on the held-out
-test split (29,578 sentences the model never saw):
+Held-out test split, 29,578 sentences the model never saw:
 
-| metric | value |
-| --- | --- |
-| accuracy | 86.6% |
-| macro F1 | 0.806 |
+| model | accuracy | macro F1 |
+| --- | --- | --- |
+| TF-IDF + logistic regression (baseline) | 82.2% | 0.753 |
+| DistilBERT, single sentence | 86.6% | 0.806 |
 
-`methods` and `results` are easy (F1 ≈ 0.93). `objective` and `background` are
-hard (F1 ≈ 0.65–0.70) — they're both short, general sentences at the top of an
-abstract and the line between "here's the problem" and "here's what we tested"
-is genuinely blurry. Published results on this dataset get to ~92%, but they do
-it by also feeding the model the surrounding sentences as context; this one
-classifies each sentence on its own. Closing that gap is the main thing I'd try
-next.
+A bag-of-words baseline already gets 82% — a lot of this task is just which
+words appear (numbers and "p <" point at `results`, "we conclude" points at
+`conclusions`). DistilBERT adds ~4 points on top of that, from word order and
+phrasing. Both models are weakest on the same two classes, `objective` and
+`background`: short, general sentences at the top of an abstract where the line
+between "here's the problem" and "here's what we tested" is genuinely blurry.
+
+Per-class numbers, confusion matrix and failure examples are in
+**[docs/evaluation.md](docs/evaluation.md)** (DistilBERT) and
+**[docs/baseline.md](docs/baseline.md)** (baseline).
+
+Published results on this dataset reach ~92% by giving the model the
+surrounding sentences as context instead of one sentence at a time — that's the
+next experiment.
 
 ## How it's put together
 
