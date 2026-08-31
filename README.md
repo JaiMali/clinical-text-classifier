@@ -40,9 +40,13 @@ curl -X POST http://107.21.9.181/predict \
 # {"label": "results", "confidence": 0.997, "all_scores": { ... }}
 ```
 
-<!-- TODO: screenshot the Swagger UI at /docs, save as docs/api.png, uncomment:
-![API docs](docs/api.png)
--->
+Or in the browser — FastAPI's auto-generated docs at
+[`/docs`](http://107.21.9.181/docs), where you can send requests with
+"Try it out":
+
+![Swagger UI — the /predict endpoint with a request body filled in](docs/api2.png)
+
+![Swagger UI — the response schema for a 200](docs/api.png)
 
 ## Results
 
