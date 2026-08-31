@@ -14,7 +14,13 @@ Nothing outside this file needs to change.
 from dataclasses import dataclass
 from typing import Callable
 
-from datasets import load_dataset as hf_load_dataset, ClassLabel, DatasetDict
+import pandas as pd
+from datasets import (
+    load_dataset as hf_load_dataset,
+    ClassLabel,
+    Dataset,
+    DatasetDict,
+)
 
 
 @dataclass
@@ -55,6 +61,46 @@ def _load_pubmed_20k_rct() -> DatasetBundle:
     )
 
 
+def _load_pubmed_20k_rct_context() -> DatasetBundle:
+    """
+    Same data as `pubmed_20k_rct`, but each example's text is a 3-sentence
+    window -- previous, current, next sentence of the abstract, joined by the
+    ``[SEP]`` marker. The label is still the *current* sentence's role; the
+    neighbours are just context. Empty string where there is no previous/next
+    (abstract boundaries).
+
+    Motivation: single-sentence classification tops out around 86% on this
+    dataset; published results reach ~92% by giving the model the surrounding
+    sentences. Train with a wider window, e.g. ``--max_length 256``.
+    """
+    base = _load_pubmed_20k_rct()  # reuse: download + ClassLabel cast
+    label_feature = base.dataset["train"].features["label"]
+
+    def windowize(split: Dataset) -> Dataset:
+        df = split.to_pandas().sort_values(["abstract_id", "sentence_id"])
+        prev = df.groupby("abstract_id")["text"].shift(1).fillna("")
+        nxt = df.groupby("abstract_id")["text"].shift(-1).fillna("")
+        df["text"] = (
+            prev.str.strip()
+            + " [SEP] "
+            + df["text"].str.strip()
+            + " [SEP] "
+            + nxt.str.strip()
+        )
+        out = Dataset.from_pandas(df, preserve_index=False)
+        return out.cast_column("label", label_feature)
+
+    windowed = DatasetDict({name: windowize(ds) for name, ds in base.dataset.items()})
+
+    return DatasetBundle(
+        dataset=windowed,
+        text_column="text",
+        label_column="label",
+        label_names=base.label_names,
+        source_name="PubMed 20k RCT (+/-1 sentence context)",
+    )
+
+
 def _load_mimic_iii() -> DatasetBundle:
     """
     Placeholder for the future MIMIC-III variant. Implement once PhysioNet
@@ -70,6 +116,7 @@ def _load_mimic_iii() -> DatasetBundle:
 # Registry: add new datasets here, one line each.
 DATASET_LOADERS: dict[str, Callable[[], DatasetBundle]] = {
     "pubmed_20k_rct": _load_pubmed_20k_rct,
+    "pubmed_20k_rct_context": _load_pubmed_20k_rct_context,
     "mimic_iii": _load_mimic_iii,
 }
 

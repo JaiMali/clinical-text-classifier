@@ -27,14 +27,28 @@ def test_all_registered_loaders_are_callable():
 
 
 @pytest.mark.integration
-def test_pubmed_20k_rct_bundle_shape():
+@pytest.mark.parametrize("name", ["pubmed_20k_rct", "pubmed_20k_rct_context"])
+def test_pubmed_bundle_shape(name):
     """
     Marked integration: downloads real data from the Hugging Face Hub.
     Run explicitly with: pytest -m integration
     """
-    bundle = load_dataset("pubmed_20k_rct")
+    bundle = load_dataset(name)
 
     assert bundle.text_column in bundle.dataset["train"].column_names
     assert bundle.label_column in bundle.dataset["train"].column_names
     assert len(bundle.label_names) > 0
     assert bundle.source_name
+    for split in ("train", "validation", "test"):
+        assert split in bundle.dataset
+
+
+@pytest.mark.integration
+def test_context_loader_windows_the_text():
+    """The context variant should wrap each sentence with [SEP] markers and
+    keep the same number of rows as the plain loader."""
+    plain = load_dataset("pubmed_20k_rct")
+    ctx = load_dataset("pubmed_20k_rct_context")
+
+    assert len(ctx.dataset["train"]) == len(plain.dataset["train"])
+    assert ctx.dataset["train"][0]["text"].count("[SEP]") == 2

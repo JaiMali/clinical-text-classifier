@@ -34,14 +34,14 @@ BASE_MODEL = "distilbert-base-uncased"
 TRACKING_URI = f"sqlite:///{Path(__file__).resolve().parents[1] / 'mlflow.db'}"
 
 
-def build_tokenize_fn(tokenizer, text_column: str):
+def build_tokenize_fn(tokenizer, text_column: str, max_length: int):
     def tokenize(batch):
         # No padding here -- we tokenize once up front, but leave every
         # sequence at its natural length. Padding is applied per-batch at
         # training time by DataCollatorWithPadding, so each batch is only
-        # as wide as its longest sentence instead of a fixed 128. The
+        # as wide as its longest sequence instead of a fixed max_length. The
         # max_length cap still guards against a pathologically long outlier.
-        return tokenizer(batch[text_column], truncation=True, max_length=128)
+        return tokenizer(batch[text_column], truncation=True, max_length=max_length)
 
     return tokenize
 
@@ -61,6 +61,12 @@ def main():
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        default=128,
+        help="Token truncation length. Use 256 for the context dataset.",
+    )
     parser.add_argument("--output_dir", default="./model_output")
     parser.add_argument(
         "--limit",
@@ -85,7 +91,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
 
     tokenized = bundle.dataset.map(
-        build_tokenize_fn(tokenizer, bundle.text_column), batched=True
+        build_tokenize_fn(tokenizer, bundle.text_column, args.max_length), batched=True
     )
 
     model = AutoModelForSequenceClassification.from_pretrained(
@@ -130,6 +136,7 @@ def main():
                 "epochs": args.epochs,
                 "lr": args.lr,
                 "batch_size": args.batch_size,
+                "max_length": args.max_length,
                 "num_labels": len(bundle.label_names),
             }
         )
