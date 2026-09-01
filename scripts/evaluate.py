@@ -1,16 +1,25 @@
 """
-Re-run the evaluation and regenerate the report.
+Evaluate a trained checkpoint on a dataset's test split and write a report.
 
+    # the deployed single-sentence model
     python -m scripts.evaluate
 
-Runs the trained model over the full PubMed 20k RCT test split and writes:
-  - docs/evaluation.md        (overall + per-class metrics, notes)
-  - docs/confusion_matrix.png (row-normalised)
+    # the context-aware v2
+    python -m scripts.evaluate \
+        --model-dir model_output/context/final \
+        --dataset pubmed_20k_rct_context --max-length 256 \
+        --out docs/evaluation_context.md --cm-out docs/confusion_matrix_context.png \
+        --title "with +/-1 sentence context"
+
+Writes a markdown report (metrics, per-class table, notes, worst mistakes) and
+a row-normalised confusion matrix PNG.
 """
 
+import argparse
+
+import matplotlib
 import numpy as np
 import torch
-import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -24,19 +33,17 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from src.data.loader import load_dataset
 
-MODEL_DIR = "model_output/final"
 BATCH = 64
-MAX_LEN = 128
 
 
-def predict_all(texts, tokenizer, model, device):
+def predict_all(texts, tokenizer, model, device, max_length):
     preds = np.zeros(len(texts), dtype=int)
     confs = np.zeros(len(texts), dtype=float)
     for i in range(0, len(texts), BATCH):
         enc = tokenizer(
             texts[i : i + BATCH],
             truncation=True,
-            max_length=MAX_LEN,
+            max_length=max_length,
             padding=True,
             return_tensors="pt",
         ).to(device)
@@ -48,7 +55,7 @@ def predict_all(texts, tokenizer, model, device):
     return preds, confs
 
 
-def plot_confusion(cm, labels, path):
+def plot_confusion(cm, labels, path, title):
     cmn = cm / cm.sum(axis=1, keepdims=True)
     fig, ax = plt.subplots(figsize=(6, 5))
     im = ax.imshow(cmn, cmap="Blues", vmin=0, vmax=1)
@@ -67,7 +74,7 @@ def plot_confusion(cm, labels, path):
                 fontsize=8,
                 color="white" if cmn[i, j] > 0.5 else "black",
             )
-    ax.set_title("Confusion matrix (row-normalised, counts in parens)")
+    ax.set_title(f"Confusion matrix — {title}\n(row-normalised, counts in parens)")
     fig.colorbar(im, fraction=0.046, pad=0.04)
     fig.tight_layout()
     fig.savefig(path, dpi=130)
@@ -75,122 +82,106 @@ def plot_confusion(cm, labels, path):
 
 
 def main():
-    bundle = load_dataset("pubmed_20k_rct")
+    p = argparse.ArgumentParser()
+    p.add_argument("--model-dir", default="model_output/final")
+    p.add_argument("--dataset", default="pubmed_20k_rct")
+    p.add_argument("--max-length", type=int, default=128)
+    p.add_argument("--out", default="docs/evaluation.md")
+    p.add_argument("--cm-out", default="docs/confusion_matrix.png")
+    p.add_argument(
+        "--title",
+        default="single sentence",
+        help="Short description of the input framing, used in headings.",
+    )
+    args = p.parse_args()
+
+    bundle = load_dataset(args.dataset)
     labels = bundle.label_names
     test = bundle.dataset["test"]
     texts = list(test[bundle.text_column])
     y_true = np.array(test[bundle.label_column])
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR).eval()
+    tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
+    model = AutoModelForSequenceClassification.from_pretrained(args.model_dir).eval()
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     model.to(device)
 
-    y_pred, conf = predict_all(texts, tokenizer, model, device)
+    y_pred, conf = predict_all(texts, tokenizer, model, device, args.max_length)
 
     acc = accuracy_score(y_true, y_pred)
     f1_macro = f1_score(y_true, y_pred, average="macro")
     rep = classification_report(y_true, y_pred, target_names=labels, output_dict=True)
     cm = confusion_matrix(y_true, y_pred)
-    plot_confusion(cm, labels, "docs/confusion_matrix.png")
+    plot_confusion(cm, labels, args.cm_out, args.title)
 
     correct = y_true == y_pred
     conf_correct = conf[correct].mean()
     conf_wrong = conf[~correct].mean()
 
-    # biggest off-diagonal confusion
     cm_off = cm.copy()
     np.fill_diagonal(cm_off, 0)
     ti, pj = np.unravel_index(cm_off.argmax(), cm_off.shape)
 
-    # highest-confidence mistakes
     wrong_idx = np.where(~correct)[0]
     worst = wrong_idx[np.argsort(-conf[wrong_idx])[:6]]
+    cm_png = args.cm_out.split("/")[-1]
 
-    lines = []
-    lines.append("# Evaluation\n")
-    lines.append(
-        "Model: `distilbert-base-uncased`, fully fine-tuned for 3 epochs. "
-        "Evaluated on the full PubMed 20k RCT **test** split "
-        f"({len(y_true):,} sentences the model never saw during training).\n"
-    )
-    lines.append(
-        "The task: given one sentence from a medical-paper abstract, predict its "
-        "role — `background`, `objective`, `methods`, `results`, or "
-        "`conclusions`.\n"
-    )
-    lines.append(
-        "This file is generated. Re-run it with `python -m scripts.evaluate`.\n"
-    )
+    best_cls = max(labels, key=lambda n: rep[n]["f1-score"])
+    worst_cls = min(labels, key=lambda n: rep[n]["f1-score"])
 
-    lines.append("## Headline numbers\n")
-    lines.append("| metric | value |")
-    lines.append("| --- | --- |")
-    lines.append(f"| accuracy | {acc:.3f} |")
-    lines.append(f"| macro F1 | {f1_macro:.3f} |")
-    lines.append(f"| mean confidence when right | {conf_correct:.3f} |")
-    lines.append(f"| mean confidence when wrong | {conf_wrong:.3f} |\n")
-
-    lines.append("## Per-class\n")
-    lines.append("| class | precision | recall | f1 | support |")
-    lines.append("| --- | --- | --- | --- | --- |")
+    lines = [
+        f"# Evaluation — {args.title}\n",
+        f"`distilbert-base-uncased`, fully fine-tuned for 3 epochs on "
+        f"`{args.dataset}`. Evaluated on the full test split "
+        f"({len(y_true):,} sentences held out from training).\n",
+        f"Generated by `python -m scripts.evaluate` (see the header for the exact "
+        f"command). Deployed model = single sentence; the context variant is a "
+        f"documented experiment, not deployed.\n",
+        "## Headline\n",
+        "| metric | value |",
+        "| --- | --- |",
+        f"| accuracy | {acc:.3f} |",
+        f"| macro F1 | {f1_macro:.3f} |",
+        f"| mean confidence when right | {conf_correct:.3f} |",
+        f"| mean confidence when wrong | {conf_wrong:.3f} |\n",
+        "## Per-class\n",
+        "| class | precision | recall | f1 | support |",
+        "| --- | --- | --- | --- | --- |",
+    ]
     for name in labels:
         r = rep[name]
         lines.append(
             f"| {name} | {r['precision']:.3f} | {r['recall']:.3f} | "
             f"{r['f1-score']:.3f} | {int(r['support']):,} |"
         )
-    lines.append("")
-
-    lines.append("## Confusion matrix\n")
-    lines.append("![confusion matrix](confusion_matrix.png)\n")
-
-    best_cls = max(labels, key=lambda n: rep[n]["f1-score"])
-    worst_cls = min(labels, key=lambda n: rep[n]["f1-score"])
-    lines.append("## What I take from this\n")
-    lines.append(
-        f"- **`{best_cls}` and `results` are easy, `{worst_cls}` and "
-        f"`background` are hard.** The easy ones have giveaway wording — "
-        f"numbers, p-values, "
-        f'"we measured", "in conclusion". The hard ones are both short, general '
-        f"statements at the very start of an abstract, and telling "
-        f'"here is the problem" from "here is what we tested" is genuinely '
-        f"ambiguous."
-    )
-    lines.append(
-        f"- **Most common mistake: `{labels[ti]}` predicted as `{labels[pj]}`** "
-        f"({cm_off[ti, pj]:,} sentences), which lines up with the point above."
-    )
-    lines.append(
-        f"- **The model knows when it's unsure.** Average confidence is "
-        f"{conf_correct:.2f} on the ones it gets right vs {conf_wrong:.2f} on "
-        f"the ones it gets wrong. If this were used for real you could hold back "
-        f"low-confidence predictions for a human to check."
-    )
-    lines.append(
-        "- **The single-sentence setup is the ceiling here.** Papers on this "
-        "dataset get to ~92% by also feeding the model the sentences around the "
-        "one being classified. This model sees one sentence in isolation, which "
-        "is most of the gap between ~86% and ~92%. Adding context is the next "
-        "experiment (see Limitations in the README)."
-    )
-    lines.append("")
-
-    lines.append("## Highest-confidence mistakes\n")
-    lines.append("| true | predicted | conf | sentence |")
-    lines.append("| --- | --- | --- | --- |")
+    lines += [
+        "",
+        "## Confusion matrix\n",
+        f"![confusion matrix]({cm_png})\n",
+        "## Notes\n",
+        f"- Easiest class: `{best_cls}` (F1 {rep[best_cls]['f1-score']:.2f}). "
+        f"Hardest: `{worst_cls}` (F1 {rep[worst_cls]['f1-score']:.2f}).",
+        f"- Most common mistake: `{labels[ti]}` predicted as `{labels[pj]}` "
+        f"({cm_off[ti, pj]:,} sentences).",
+        f"- Calibration: mean confidence {conf_correct:.2f} when right vs "
+        f"{conf_wrong:.2f} when wrong, so a confidence threshold could hold back "
+        f"uncertain predictions for review.",
+        "",
+        "## Highest-confidence mistakes\n",
+        "| true | predicted | conf | sentence |",
+        "| --- | --- | --- | --- |",
+    ]
     for idx in worst:
-        s = texts[idx].replace("|", "\\|")
+        s = texts[idx].replace("|", "\\|").replace("\n", " ")
         s = (s[:110] + "…") if len(s) > 110 else s
         lines.append(
-            f"| {labels[y_true[idx]]} | {labels[y_pred[idx]]} | "
-            f"{conf[idx]:.2f} | {s} |"
+            f"| {labels[y_true[idx]]} | {labels[y_pred[idx]]} | {conf[idx]:.2f} | {s} |"
         )
     lines.append("")
 
-    with open("docs/evaluation.md", "w") as f:
+    with open(args.out, "w") as f:
         f.write("\n".join(lines))
-    print("wrote docs/evaluation.md")
+    print(f"wrote {args.out}")
     print(f"\naccuracy={acc:.3f}  macro_f1={f1_macro:.3f}")
 
 

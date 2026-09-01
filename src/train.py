@@ -82,6 +82,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # A smoke run (--limit / --max_steps) trains a throwaway model, so keep it
+    # out of "<output_dir>/final" -- that path is the real, deployable model.
+    is_smoke = args.limit > 0 or args.max_steps > 0
+    save_subdir = "smoke" if is_smoke else "final"
+
     bundle = load_dataset(args.dataset)
     if args.limit > 0:
         bundle.dataset = DatasetDict(
@@ -146,14 +151,17 @@ def main():
         test_metrics = trainer.evaluate(tokenized["test"])
         mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
 
-        trainer.save_model(f"{args.output_dir}/final")
-        tokenizer.save_pretrained(f"{args.output_dir}/final")
+        out = f"{args.output_dir}/{save_subdir}"
+        trainer.save_model(out)
+        tokenizer.save_pretrained(out)
         # The API reads this to map class indices -> human-readable names.
-        with open(f"{args.output_dir}/final/label_names.json", "w") as f:
+        with open(f"{out}/label_names.json", "w") as f:
             json.dump(bundle.label_names, f)
-        mlflow.log_artifacts(f"{args.output_dir}/final", artifact_path="model")
+        if not is_smoke:
+            mlflow.log_artifacts(out, artifact_path="model")
 
         print(f"Test metrics: {test_metrics}")
+        print(f"Saved to {out}")
 
 
 if __name__ == "__main__":

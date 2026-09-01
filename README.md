@@ -50,27 +50,29 @@ Or in the browser — FastAPI's auto-generated docs at
 
 ## Results
 
-Held-out test split, 29,578 sentences the model never saw:
+Three models, same held-out test split (29,578 sentences), same evaluation:
 
-| model | accuracy | macro F1 |
-| --- | --- | --- |
-| TF-IDF + logistic regression (baseline) | 82.2% | 0.753 |
-| DistilBERT, single sentence | 86.6% | 0.806 |
+| model | input | accuracy | macro F1 |
+| --- | --- | --- | --- |
+| TF-IDF + logistic regression | one sentence | 82.2% | 0.753 |
+| DistilBERT | one sentence | 86.6% | 0.806 |
+| DistilBERT | sentence + its 2 neighbours | **91.1%** | **0.858** |
 
 A bag-of-words baseline already gets 82% — a lot of this task is just which
-words appear (numbers and "p <" point at `results`, "we conclude" points at
-`conclusions`). DistilBERT adds ~4 points on top of that, from word order and
-phrasing. Both models are weakest on the same two classes, `objective` and
-`background`: short, general sentences at the top of an abstract where the line
-between "here's the problem" and "here's what we tested" is genuinely blurry.
+words appear. DistilBERT on one sentence adds ~4 points (word order, phrasing).
+Giving it the neighbouring sentences adds another ~4.5: a `conclusions` sentence
+looks almost identical to a `results` sentence on its own, and what separates
+them is *position* in the abstract.
 
-Per-class numbers, confusion matrix and failure examples are in
-**[docs/evaluation.md](docs/evaluation.md)** (DistilBERT) and
-**[docs/baseline.md](docs/baseline.md)** (baseline).
+The **deployed** model is the single-sentence DistilBERT. The context model is a
+documented experiment — serving it would mean changing the API to take the
+neighbours too.
 
-Published results on this dataset reach ~92% by giving the model the
-surrounding sentences as context instead of one sentence at a time — that's the
-next experiment.
+Write-ups: **[docs/experiments.md](docs/experiments.md)** (the three-step
+comparison), plus per-class numbers / confusion matrices / failure examples in
+[docs/baseline.md](docs/baseline.md),
+[docs/evaluation.md](docs/evaluation.md), and
+[docs/evaluation_context.md](docs/evaluation_context.md).
 
 ## How it's put together
 
@@ -78,7 +80,8 @@ next experiment.
 src/data/loader.py    the only file that knows anything dataset-specific
 src/train.py           fine-tune + log params/metrics/model to MLflow
 src/api/main.py         FastAPI wrapper around the saved checkpoint
-scripts/evaluate.py     regenerates docs/evaluation.md + the confusion matrix
+scripts/baseline.py     TF-IDF + logreg baseline -> docs/baseline.md
+scripts/evaluate.py     evaluate any checkpoint -> docs/evaluation*.md + confusion matrix
 infra/                  Terraform for the EC2 instance + security group
 .github/workflows/      test -> build image -> push to GHCR -> deploy to EC2
 ```
@@ -139,8 +142,9 @@ tear it down.
 
 ## Known limitations
 
-- **Single-sentence context** — ~86% here vs ~92% with surrounding sentences.
-  Biggest lever for a v2.
+- **`objective` vs `background`** is still the weak spot (~0.68 F1) even with
+  context — those two roles are genuinely close and the neighbours don't always
+  settle it.
 - **DistilBERT is small on purpose** — a bigger model would likely do better;
   that wasn't the point.
 - **HTTP, not HTTPS**, and the URL is a bare IP that changes if the instance
